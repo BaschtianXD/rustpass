@@ -123,10 +123,10 @@ impl RpVault {
         let enc_vault = RpVaultEncrypted {
             name: self.name,
             version: self.version,
-            password_hash_hash: self.password_hash_hash.to_vec(),
+            password_hash_hash: self.password_hash_hash.into(),
             salt: self.salt.as_str().to_owned(),
             encrypted_key: self.encrypted_key,
-            nonce: self.nonce.to_vec(),
+            nonce: self.nonce.into(),
 
             encrypted_data,
         };
@@ -233,11 +233,11 @@ pub struct RpVaultEncrypted {
     pub name: String,
     version: String,
     #[serde(rename = "hash")]
-    password_hash_hash: Vec<u8>, //GenericArray<u8, U32>
+    password_hash_hash: [u8; 32],
     salt: String,
     #[serde(rename = "key")]
     encrypted_key: Vec<u8>,
-    nonce: Vec<u8>, //GenericArray<u8, U12>,
+    nonce: [u8; 12],
 
     encrypted_data: Vec<u8>,
 }
