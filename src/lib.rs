@@ -429,6 +429,34 @@ mod test {
     }
 
     #[test]
+    fn encrypt_wrong_password() -> Result<(), String> {
+        let vault = get_small_vault();
+        let wrong_password = "NotYourPassword";
+
+        let res = vault.encrypt(wrong_password);
+
+        match res {
+            Ok(_) => Err("Encrypt with wrong password is supposed to fail".into()),
+            Err(_) => Ok(()),
+        }
+    }
+
+    #[test]
+    fn decrypt_wrong_password() -> Result<(), String> {
+        let vault = get_small_vault();
+        let wrong_password = "NotYourPassword";
+
+        let enc_vault = vault.encrypt(PW).expect("Could not encrypt vault");
+
+        let res = enc_vault.decrypt(wrong_password);
+
+        match res {
+            Ok(_) => Err("Decrypt with wrong password is supposed to fail.".into()),
+            Err(_) => Ok(()),
+        }
+    }
+
+    #[test]
     fn add_entry() -> Result<(), String> {
         let mut vault = get_small_vault();
         vault.add_entry(VaultEntry::new_anything(
