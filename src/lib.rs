@@ -24,9 +24,11 @@ pub struct RpVault {
     password_hash_hash: GenericArray<u8, U32>,
     salt: SaltString,
     encrypted_key: Vec<u8>,
-    nonce: GenericArray<u8, U12>,
 
+    nonce: GenericArray<u8, U12>,
     entries: Vec<VaultEntry>,
+
+    changed: bool,
 }
 
 impl RpVault {
@@ -48,7 +50,7 @@ impl RpVault {
         let nonce = Nonce::from([0u8; 12]);
 
         let encrypted_key = cipher
-            .encrypt(&nonce, gen_key.as_ref())
+            .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref()) // can we use static nonce here? We only encrypt the key once.
             .expect("Could not encrypt key");
 
         let mut hasher = Sha256::new();
@@ -64,6 +66,8 @@ impl RpVault {
             nonce,
 
             entries: Vec::new(),
+
+            changed: true,
         };
 
         return Ok(vault);
@@ -71,6 +75,7 @@ impl RpVault {
 
     pub fn add_entry(&mut self, entry: VaultEntry) {
         self.entries.push(entry);
+        self.changed = true;
     }
 
     pub fn get_entries(&self) -> &Vec<VaultEntry> {
@@ -79,13 +84,18 @@ impl RpVault {
 
     pub fn insert_entry(&mut self, entry: VaultEntry, index: usize) {
         self.entries.insert(index, entry);
+        self.changed = true;
     }
 
     pub fn remove_entry(&mut self, index: usize) {
         self.entries.swap_remove(index);
+        self.changed = true;
     }
 
-    pub fn encrypt(self, password: &str) -> Result<RpVaultEncrypted, Error> {
+    pub fn encrypt(mut self, password: &str) -> Result<RpVaultEncrypted, Error> {
+        if self.changed {
+            increase_nonce(&mut self.nonce);
+        }
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &self.salt)
@@ -101,16 +111,14 @@ impl RpVault {
         }
 
         // Decrypt key
-        let foo = password_hash.hash.expect("Could not extract hash");
-        let pw_key = Key::from_slice(foo.as_bytes());
+        let pw_hash = password_hash.hash.expect("Could not extract hash");
+        let pw_key = Key::from_slice(pw_hash.as_bytes());
         let cipher = Aes256Gcm::new(pw_key);
 
         let key = cipher
             .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
             .expect("Could not decrypt key");
 
-        // Encode data as json and encrypt
-        //let json = serde_json::to_string(&self.entries).expect("Could not serialize data");
         let mut buf: Vec<u8> = Vec::new();
         ciborium::ser::into_writer(&self.entries, &mut buf).expect("Could not write to buffer");
         let key = Key::from_slice(&key);
@@ -132,6 +140,56 @@ impl RpVault {
         };
 
         Ok(enc_vault)
+    }
+
+    pub fn change_password(&mut self, old_password: &str, new_password: &str) -> Result<(), Error> {
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(old_password.as_bytes(), &self.salt)
+            .expect("Could not hash old password");
+
+        // Check if password is correct
+        let mut hasher = Sha256::new();
+        hasher.update(password_hash.hash.expect("Could not extract hash"));
+        let password_hash_hash = hasher.finalize();
+
+        let pwhh = GenericArray::from_slice(&self.password_hash_hash);
+
+        if password_hash_hash != *pwhh {
+            return Err(Error::WrongPassword);
+        }
+
+        // decrypt key with old password
+        let old_safe_pw = password_hash.hash.expect("Could not extract hash");
+        let pw_key = Key::from_slice(old_safe_pw.as_bytes());
+        let cipher = Aes256Gcm::new(pw_key);
+
+        let key = cipher
+            .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
+            .expect("Could not decrypt key");
+
+        // generate new cipher
+        self.salt = SaltString::generate(&mut OsRng);
+        let password_hash = argon2
+            .hash_password(new_password.as_bytes(), &self.salt)
+            .expect("Could not hash new password");
+
+        let mut hasher = Sha256::new();
+        hasher.update(password_hash.hash.expect("Could not extract hash"));
+        self.password_hash_hash = hasher.finalize();
+
+        // encrypt new key with new password
+        let cipher = Aes256Gcm::new(Key::from_slice(
+            password_hash
+                .hash
+                .expect("Could not extract hash")
+                .as_bytes(),
+        ));
+        self.encrypted_key = cipher
+            .encrypt(&Nonce::from([0u8; 12]), key.as_ref())
+            .expect("Could not encrypt key");
+
+        Ok(())
     }
 
     pub fn iter(&self) -> VaultIterator {
@@ -281,18 +339,17 @@ impl RpVaultEncrypted {
         //let data: Vec<VaultEntry> =
         let data = ciborium::de::from_reader(cursor).expect("Could not parse data");
 
-        let mut nonce = GenericArray::from_slice(&self.nonce).to_owned();
-        increase_nonce(&mut nonce);
-
         let vault = RpVault {
             name: self.name,
             version: self.version,
             password_hash_hash: GenericArray::from_slice(&self.password_hash_hash).to_owned(),
             salt: SaltString::new(&self.salt).expect("Could not parse salt"),
             encrypted_key: self.encrypted_key,
-            nonce: nonce,
+            nonce: GenericArray::from_slice(&self.nonce).to_owned(),
 
             entries: data,
+
+            changed: false,
         };
 
         Ok(vault)
@@ -393,6 +450,48 @@ mod test {
             }
             _default => return Err("Entry is of wrong type".into()),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn change_password_fail() -> Result<(), String> {
+        let mut vault = get_small_vault();
+        let new_pw = "AnotehrSuperSecurePassword";
+        let fail_pw = "WrongPassword";
+
+        match vault.change_password(fail_pw, new_pw) {
+            Ok(_) => Err("Call to change_password with wrong password is supposed to fail".into()),
+            Err(_) => Ok(()),
+        }
+    }
+
+    #[test]
+    fn change_password_success() -> Result<(), String> {
+        let mut vault = get_small_vault();
+        let new_pw = "AnotherSuperSecurePassword";
+
+        let enc_key = vault.encrypted_key.to_owned();
+
+        match vault.change_password(PW, new_pw) {
+            Ok(_) => {}
+            Err(_) => {
+                return Err(
+                    "Call to change_password with correct password is supposed to succeed".into(),
+                )
+            }
+        }
+
+        if enc_key == vault.encrypted_key {
+            return Err("Encrypted key is the same".into());
+        }
+
+        let enc_vault = vault
+            .encrypt(new_pw)
+            .expect("Could not encrypt vault with new password");
+        let _vault = enc_vault
+            .decrypt(new_pw)
+            .expect("Coudl not decrypt vault with new password");
 
         Ok(())
     }
