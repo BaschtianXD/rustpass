@@ -198,6 +198,10 @@ impl RpVault {
             vault: (&self),
         }
     }
+
+    pub fn check_for_duplicated_passwords(&self) -> Vec<&VaultEntry> {
+        [].to_vec()
+    }
 }
 
 pub struct VaultIterator<'a> {
@@ -247,6 +251,8 @@ pub struct VaultEntry {
     pub last_used: Option<NaiveDateTime>,
     #[serde(rename = "d")]
     pub data: VaultEntryData,
+    #[serde(rename = "co")]
+    pub comment: String,
 }
 
 impl VaultEntry {
@@ -255,6 +261,7 @@ impl VaultEntry {
         title: Option<String>,
         username: String,
         password: String,
+        comment: String,
     ) -> VaultEntry {
         VaultEntry {
             title: title.unwrap_or((&website).into()),
@@ -266,16 +273,61 @@ impl VaultEntry {
                 username,
                 password,
             },
+            comment,
         }
     }
 
-    pub fn new_anything(title: String, data: String) -> VaultEntry {
+    pub fn new_anything(title: String, data: String, comment: String) -> VaultEntry {
         VaultEntry {
             title,
             created: Utc::now().naive_local(),
             last_changed: Utc::now().naive_local(),
             last_used: None,
             data: VaultEntryData::Anything { data },
+            comment,
+        }
+    }
+
+    pub fn get_password_quality(&self) -> Option<PasswordQuality> {
+        match &self.data {
+            VaultEntryData::Password {
+                website: _,
+                username: _,
+                password,
+            } => {
+                let mut score = 0u8;
+                if password.chars().any(|c| matches!(c, 'a'..='z')) {
+                    score += 1;
+                }
+                if password.chars().any(|c| matches!(c, 'A'..='Z')) {
+                    score += 1;
+                }
+                if password.chars().any(|c| matches!(c, '0'..='9')) {
+                    score += 1;
+                }
+                if password.chars().any(|c| {
+                    matches!(c, '!'..='/')
+                        || matches!(c, ':'..='@')
+                        || matches!(c, '['..='`')
+                        || matches!(c, '{'..='~')
+                }) {
+                    score += 1;
+                }
+                let num_chars = password.chars().count();
+                match num_chars {
+                    0..=9 => return Some(PasswordQuality::Bad),
+                    10..=12 => score += 1,
+                    13..=15 => score += 2,
+                    _other => score += 3,
+                }
+
+                match score {
+                    0..=4 => return Some(PasswordQuality::Bad),
+                    5..=6 => return Some(PasswordQuality::Good),
+                    _other => return Some(PasswordQuality::Excellent),
+                }
+            }
+            VaultEntryData::Anything { data: _ } => None,
         }
     }
 }
@@ -284,6 +336,14 @@ impl Display for VaultEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: TODO", self.title) // TODO
     }
+}
+
+#[derive(PartialEq, Debug)]
+pub enum PasswordQuality {
+    Exposed,
+    Bad,
+    Good,
+    Excellent,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -378,7 +438,7 @@ fn increase_nonce(nonce: &mut GenericArray<u8, U12>) {
 
 #[cfg(test)]
 mod test {
-    use crate::{RpVault, VaultEntry};
+    use crate::{PasswordQuality::*, RpVault, VaultEntry};
 
     const NAME: &str = "TestVault";
     const PW: &str = "Super-Secret_P4ssw0rd!";
@@ -391,6 +451,7 @@ mod test {
             Some("Googlerus Maximus".to_string()),
             "Tim Burton".to_string(),
             "GooglePW".to_string(),
+            "".to_string(),
         ));
 
         vault
@@ -462,6 +523,7 @@ mod test {
         vault.add_entry(VaultEntry::new_anything(
             "Bullut".into(),
             "Wallah Krise".into(),
+            "".into(),
         ));
 
         assert_eq!(
@@ -520,6 +582,39 @@ mod test {
         let _vault = enc_vault
             .decrypt(new_pw)
             .expect("Coudl not decrypt vault with new password");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_password_quality() -> Result<(), String> {
+        let website = "www.nitter.com".to_string();
+        let title = None;
+        let username = "FooBar".to_string();
+
+        let test_cases = [
+            ("Sh0rty!", Bad),
+            ("NotABadPassw0rd", Good),
+            ("W0nderful-adr6!9-Password!", Excellent),
+        ];
+
+        for case in test_cases {
+            assert_eq!(
+                VaultEntry::new_password(
+                    website.clone(),
+                    title.clone(),
+                    username.clone(),
+                    case.0.into(),
+                    "".into()
+                )
+                .get_password_quality()
+                .expect("Should return Some quality"),
+                case.1,
+                "{} is supposed to be {:?}",
+                case.0,
+                case.1
+            );
+        }
 
         Ok(())
     }

@@ -48,6 +48,7 @@ struct AddEntryArgs {
     website: String,
     username: String,
     password: String,
+    comment: Option<String>,
 }
 
 #[derive(Args)]
@@ -118,6 +119,7 @@ fn main() {
                             None,
                             new_entry.username,
                             new_entry.password,
+                            new_entry.comment.unwrap_or("".into()),
                         )),
                         Command::GetAll => {
                             for (index, entry) in vault.iter().enumerate() {
