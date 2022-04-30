@@ -1,4 +1,7 @@
-use std::fmt::{self, Display};
+use std::{
+    collections::HashMap,
+    fmt::{self, Display},
+};
 
 use aes_gcm::aead::generic_array::{
     typenum::{U12, U32},
@@ -18,6 +21,7 @@ use std::io::Cursor;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[derive(Clone)]
 pub struct RpVault {
     pub name: String,
     version: String,
@@ -195,12 +199,35 @@ impl RpVault {
     pub fn iter(&self) -> VaultIterator {
         VaultIterator {
             index: 0,
-            vault: (&self),
+            vault: &self,
         }
     }
 
     pub fn check_for_duplicated_passwords(&self) -> Vec<&VaultEntry> {
-        [].to_vec()
+        let mut duplicated = vec![false; self.entries.len()];
+        let mut hash_map = HashMap::new();
+
+        for (index, bar) in self.get_entries().iter().enumerate() {
+            match &bar.data {
+                VaultEntryData::Password {
+                    website: _,
+                    username: _,
+                    password,
+                } => match hash_map.insert(password.clone(), index) {
+                    Some(old_index) => {
+                        duplicated[index] = true;
+                        duplicated[old_index] = true;
+                    }
+                    None => continue, // Haven't seen that password yet
+                },
+                VaultEntryData::Anything { data: _ } => continue, // Not a password
+            }
+        }
+        self.get_entries()
+            .iter()
+            .zip(duplicated)
+            .filter_map(|(entry, dup)| if dup { Some(entry) } else { None })
+            .collect()
     }
 }
 
@@ -223,7 +250,7 @@ impl<'a> Iterator for VaultIterator<'a> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum VaultEntryData {
     Password {
         #[serde(rename = "w")]
@@ -239,7 +266,7 @@ pub enum VaultEntryData {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct VaultEntry {
     #[serde(rename = "t")]
     pub title: String,
@@ -346,7 +373,7 @@ pub enum PasswordQuality {
     Excellent,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RpVaultEncrypted {
     pub name: String,
     version: String,
@@ -419,6 +446,7 @@ impl RpVaultEncrypted {
 #[derive(Debug)]
 pub enum Error {
     WrongPassword,
+    IntegrityCompomised,
     Unknown,
 }
 
@@ -614,6 +642,37 @@ mod test {
                 case.0,
                 case.1
             );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_duplicated_passwords() -> Result<(), String> {
+        let mut vault = get_small_vault();
+        vault.add_entry(VaultEntry::new_password(
+            // add the same entry again
+            "www.google.com".to_string(),
+            Some("Googlerus Maximus".to_string()),
+            "Tim Burton".to_string(),
+            "GooglePW".to_string(),
+            "".to_string(),
+        ));
+        vault.add_entry(VaultEntry::new_password(
+            "www.google.com".to_string(),
+            Some("Googlerus Maximus".to_string()),
+            "Tim Burton".to_string(),
+            "OtherPw".to_string(),
+            "".to_string(),
+        ));
+
+        let result = vault.check_for_duplicated_passwords();
+
+        for (result, expected) in result
+            .iter()
+            .zip(vec![&vault.entries[0], &vault.entries[1]])
+        {
+            assert_eq!(**result, *expected, "Returned wrong entry");
         }
 
         Ok(())
