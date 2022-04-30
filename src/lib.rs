@@ -443,7 +443,7 @@ impl RpVaultEncrypted {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub enum Error {
     WrongPassword,
     IntegrityCompomised,
