@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use rustpass::{RpVault, RpVaultEncrypted, VaultEntry};
+use rustpass::{Vault, VaultEncrypted, VaultEntry};
 use std::env;
 use std::ffi::OsString;
 use std::fs::File;
@@ -19,7 +19,7 @@ struct ProgramArgs {
     #[clap(short, long)]
     name: Option<String>,
 
-    /// Optional password for the vault
+    /// Password for the vault
     #[clap(short, long)]
     password: String,
 }
@@ -71,7 +71,7 @@ fn main() {
                 exit(1);
             }
             Some(name) => {
-                RpVault::new_with_password(name, &args.password).expect("Could not build vault")
+                Vault::new_with_password(name, &args.password).expect("Could not build vault")
             }
         };
         println!("Created new vault");
@@ -80,7 +80,7 @@ fn main() {
         //let json = fs::read_to_string(&path).expect("Could not read file");
         //let vault: RpVaultEncrypted = serde_json::from_str(&json).expect("Could not parse file");
         let vault_file = File::open(&path).expect("Could not open file");
-        let vault: RpVaultEncrypted =
+        let vault: VaultEncrypted =
             ciborium::de::from_reader(&vault_file).expect("Could not parse file");
         vault
             .decrypt(&args.password)

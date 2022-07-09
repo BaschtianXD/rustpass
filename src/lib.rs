@@ -21,8 +21,11 @@ use std::io::Cursor;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Main structure to safely store credentials.
+///
+/// This is the unencrypted structure containing credentials and cryptographical data.
 #[derive(Clone)]
-pub struct RpVault {
+pub struct Vault {
     pub name: String,
     version: String,
     password_hash_hash: GenericArray<u8, U32>,
@@ -35,12 +38,22 @@ pub struct RpVault {
     changed: bool,
 }
 
-impl RpVault {
-    pub fn new_with_password(name: String, password: &str) -> Result<RpVault, ()> {
+impl Vault {
+    /// Create a new Vault with a password as authentication method.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - A string that holds the name of the vault
+    /// * `password` - A string ref that hold the password of the vault
+    ///
+    /// # Examples
+    ///
+    /// TODO
+    pub fn new_with_password<N: AsRef<str>>(name: String, password: N) -> Result<Vault, ()> {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
         let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)
+            .hash_password(password.as_ref().as_bytes(), &salt)
             .expect("Could not hash password");
 
         let safe_pw = password_hash.hash.expect("Could not extract hash");
@@ -61,7 +74,7 @@ impl RpVault {
         hasher.update(safe_pw);
         let password_hash_hash = hasher.finalize();
 
-        let vault = RpVault {
+        let vault = Vault {
             name,
             version: VERSION.to_owned(),
             password_hash_hash,
@@ -77,26 +90,60 @@ impl RpVault {
         return Ok(vault);
     }
 
+    /// Adds a new vault entry to self.
+    ///
+    /// Appends a new entry at the back. If you want to insert a new entry at a specific index use [`insert_entry`](Self::insert_entry) instead.
+    ///
     pub fn add_entry(&mut self, entry: VaultEntry) {
         self.entries.push(entry);
         self.changed = true;
     }
 
+    /// Retrieve all vault entries from self.
     pub fn get_entries(&self) -> &Vec<VaultEntry> {
         &self.entries
     }
 
+    /// Inserts a new vault entry to self at the given index.
     pub fn insert_entry(&mut self, entry: VaultEntry, index: usize) {
         self.entries.insert(index, entry);
         self.changed = true;
     }
 
+    /// Updates the vault entry at the give index with the new vault entry.
+    ///
+    /// This replaces the old entry with the new one.
+    pub fn update_entry(&mut self, index: usize, new_entry: VaultEntry) {
+        let foo = self.entries.get_mut(index).unwrap();
+        *foo = new_entry;
+    }
+
+    /// Removes an enrty from self.
+    ///
+    /// For further information check [`Vec::remove`](https://doc.rust-lang.org/alloc/vec/struct.Vec.html#method.remove)
     pub fn remove_entry(&mut self, index: usize) {
+        self.entries.remove(index);
+        self.changed = true;
+    }
+
+    /// Removes an enrty from self.
+    ///
+    /// For further information check [`Vec::swap_remove`](https://doc.rust-lang.org/alloc/vec/struct.Vec.html#method.swap_remove)
+    pub fn swap_remove_entry(&mut self, index: usize) {
         self.entries.swap_remove(index);
         self.changed = true;
     }
 
-    pub fn encrypt(mut self, password: &str) -> Result<RpVaultEncrypted, Error> {
+    /// Sets `last_used` to now on the [VaultEntry] at the given `index`.
+    pub fn set_last_used(&mut self, index: usize) {
+        let mut entry = &mut self.entries[index];
+        entry.last_used = Some(Utc::now().naive_local());
+    }
+
+    /// Encrypts `self`.
+    ///
+    /// Checks if the given password is correct. If so, the vault gets encrypted and a `Result<VaultEncrypted, Error>` gets returned
+    pub fn encrypt(mut self, password: &str) -> Result<VaultEncrypted, Error> {
         if self.changed {
             increase_nonce(&mut self.nonce);
         }
@@ -132,7 +179,7 @@ impl RpVault {
             .encrypt(&self.nonce, &*buf)
             .expect("Could not encrypt json data");
 
-        let enc_vault = RpVaultEncrypted {
+        let enc_vault = VaultEncrypted {
             name: self.name,
             version: self.version,
             password_hash_hash: self.password_hash_hash.into(),
@@ -146,10 +193,17 @@ impl RpVault {
         Ok(enc_vault)
     }
 
-    pub fn change_password(&mut self, old_password: &str, new_password: &str) -> Result<(), Error> {
+    /// Changes the password of `self`
+    ///
+    /// Checks if the given `old_password` is correct. If so the password for `self` gets changed to `new_password`. Returns a `Result<(), Error>` wether the change was successfull or not.
+    pub fn change_password<N: AsRef<str>>(
+        &mut self,
+        old_password: N,
+        new_password: N,
+    ) -> Result<(), Error> {
         let argon2 = Argon2::default();
         let password_hash = argon2
-            .hash_password(old_password.as_bytes(), &self.salt)
+            .hash_password(old_password.as_ref().as_bytes(), &self.salt)
             .expect("Could not hash old password");
 
         // Check if password is correct
@@ -175,7 +229,7 @@ impl RpVault {
         // generate new cipher
         self.salt = SaltString::generate(&mut OsRng);
         let password_hash = argon2
-            .hash_password(new_password.as_bytes(), &self.salt)
+            .hash_password(new_password.as_ref().as_bytes(), &self.salt)
             .expect("Could not hash new password");
 
         let mut hasher = Sha256::new();
@@ -196,6 +250,7 @@ impl RpVault {
         Ok(())
     }
 
+    /// Returns an iterator over all [VaultEntry] of self.
     pub fn iter(&self) -> VaultIterator {
         VaultIterator {
             index: 0,
@@ -203,6 +258,9 @@ impl RpVault {
         }
     }
 
+    /// Checks for duplicated passwords
+    ///
+    /// Entries with matching passwords are returned in a [Vec].
     pub fn check_for_duplicated_passwords(&self) -> Vec<&VaultEntry> {
         let mut duplicated = vec![false; self.entries.len()];
         let mut hash_map = HashMap::new();
@@ -231,9 +289,10 @@ impl RpVault {
     }
 }
 
+/// Iterator over [VaultEntry]
 pub struct VaultIterator<'a> {
     index: usize,
-    vault: &'a RpVault,
+    vault: &'a Vault,
 }
 
 impl<'a> Iterator for VaultIterator<'a> {
@@ -250,39 +309,34 @@ impl<'a> Iterator for VaultIterator<'a> {
     }
 }
 
+/// Variants of [VaultEntry] data that can be saved in a [Vault]
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum VaultEntryData {
     Password {
-        #[serde(rename = "w")]
         website: String,
-        #[serde(rename = "u")]
         username: String,
-        #[serde(rename = "p")]
         password: String,
     },
     Anything {
-        #[serde(rename = "d")]
         data: String,
     },
 }
 
+/// Item for [Vault]
+///
+/// Contains [VaultEntryData] and metadata for the item.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct VaultEntry {
-    #[serde(rename = "t")]
     pub title: String,
-    #[serde(rename = "c")]
     pub created: NaiveDateTime,
-    #[serde(rename = "lc")]
     pub last_changed: NaiveDateTime,
-    #[serde(rename = "lu")]
     pub last_used: Option<NaiveDateTime>,
-    #[serde(rename = "d")]
     pub data: VaultEntryData,
-    #[serde(rename = "co")]
     pub comment: String,
 }
 
 impl VaultEntry {
+    /// Creates a new [VaultEntry] with password credentials
     pub fn new_password(
         website: String,
         title: Option<String>,
@@ -291,7 +345,7 @@ impl VaultEntry {
         comment: String,
     ) -> VaultEntry {
         VaultEntry {
-            title: title.unwrap_or((&website).into()),
+            title: title.unwrap_or(format!("{}@{}", &username, &website).into()),
             created: Utc::now().naive_local(),
             last_changed: Utc::now().naive_local(),
             last_used: None,
@@ -304,6 +358,7 @@ impl VaultEntry {
         }
     }
 
+    /// Creates a new [VaultEntry] with string data
     pub fn new_anything(title: String, data: String, comment: String) -> VaultEntry {
         VaultEntry {
             title,
@@ -315,7 +370,10 @@ impl VaultEntry {
         }
     }
 
+    /// If [self] has password data, check the password for its quality.
     pub fn get_password_quality(&self) -> Option<PasswordQuality> {
+        // TODO maybe check if we can check for exposed passwords in leaks.
+        // example: https://haveibeenpwned.com/API/v3
         match &self.data {
             VaultEntryData::Password {
                 website: _,
@@ -373,8 +431,9 @@ pub enum PasswordQuality {
     Excellent,
 }
 
+/// Represents a [Vault] in an encrypted state
 #[derive(Serialize, Deserialize, Clone)]
-pub struct RpVaultEncrypted {
+pub struct VaultEncrypted {
     pub name: String,
     version: String,
     #[serde(rename = "hash")]
@@ -387,8 +446,9 @@ pub struct RpVaultEncrypted {
     encrypted_data: Vec<u8>,
 }
 
-impl RpVaultEncrypted {
-    pub fn decrypt(self, password: &str) -> Result<RpVault, Error> {
+impl VaultEncrypted {
+    /// Tries to decrypt [self] with the given `password`
+    pub fn decrypt(self, password: &str) -> Result<Vault, Error> {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &self.salt)
@@ -426,7 +486,7 @@ impl RpVaultEncrypted {
         //let data: Vec<VaultEntry> =
         let data = ciborium::de::from_reader(cursor).expect("Could not parse data");
 
-        let vault = RpVault {
+        let vault = Vault {
             name: self.name,
             version: self.version,
             password_hash_hash: GenericArray::from_slice(&self.password_hash_hash).to_owned(),
@@ -443,13 +503,15 @@ impl RpVaultEncrypted {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Error {
     WrongPassword,
     IntegrityCompomised,
+    MalformedInput,
     Unknown,
 }
 
+/// Increases the given `nonce` by one
 fn increase_nonce(nonce: &mut GenericArray<u8, U12>) {
     // TODO when nonce is back at 0000....0000 again we should change the key as it is no longer considered safe, as we use the same nonce twice
     let slice = nonce.as_mut_slice();
@@ -466,14 +528,13 @@ fn increase_nonce(nonce: &mut GenericArray<u8, U12>) {
 
 #[cfg(test)]
 mod test {
-    use crate::{PasswordQuality::*, RpVault, VaultEntry};
+    use crate::{PasswordQuality::*, Vault, VaultEntry};
 
     const NAME: &str = "TestVault";
     const PW: &str = "Super-Secret_P4ssw0rd!";
 
-    fn get_small_vault() -> RpVault {
-        let mut vault =
-            RpVault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
+    fn get_small_vault() -> Vault {
+        let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
         vault.add_entry(VaultEntry::new_password(
             "www.google.com".to_string(),
             Some("Googlerus Maximus".to_string()),
@@ -547,6 +608,7 @@ mod test {
 
     #[test]
     fn add_entry() -> Result<(), String> {
+        let expected_result = 2;
         let mut vault = get_small_vault();
         vault.add_entry(VaultEntry::new_anything(
             "Bullut".into(),
@@ -556,8 +618,10 @@ mod test {
 
         assert_eq!(
             vault.entries.len(),
-            2,
-            "Vault entries has wrong number of entries"
+            expected_result,
+            "Vault entries has {} number of entries, expected: {}",
+            vault.entries.len(),
+            expected_result
         );
 
         let entry = vault.entries.get(1).expect("Could not get entry");
@@ -674,6 +738,39 @@ mod test {
         {
             assert_eq!(**result, *expected, "Returned wrong entry");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_100k_vault() -> Result<(), String> {
+        let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
+        (0..100_000).for_each(|_| {
+            vault.add_entry(VaultEntry::new_password(
+                "www.google.com".to_string(),
+                Some("Googlerus Maximus".to_string()),
+                "Tim Burton".to_string(),
+                "GooglePW".to_string(),
+                "".to_string(),
+            ));
+        });
+
+        assert_eq!(
+            vault.entries.len(),
+            100_000,
+            "Vault has wrong number of entries."
+        );
+
+        let enc = vault.encrypt(&PW).expect("Could not encrypt vault");
+        let decrypted = enc.decrypt(&PW).expect("Could not decrypt vault");
+
+        assert_eq!(
+            decrypted.entries.len(),
+            100_000,
+            "Vault has {} number of entries, expected: {}",
+            decrypted.entries.len(),
+            100_000
+        );
 
         Ok(())
     }
