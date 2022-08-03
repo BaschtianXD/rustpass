@@ -67,7 +67,7 @@ impl Vault {
         let nonce = Nonce::from([0u8; 12]);
 
         let encrypted_key = cipher
-            .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref()) // can we use static nonce here? We only encrypt the key once.
+            .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
             .expect("Could not encrypt key");
 
         let mut hasher = Sha256::new();
@@ -144,9 +144,6 @@ impl Vault {
     ///
     /// Checks if the given password is correct. If so, the vault gets encrypted and a `Result<VaultEncrypted, Error>` gets returned
     pub fn encrypt(mut self, password: &str) -> Result<VaultEncrypted, Error> {
-        if self.changed {
-            increase_nonce(&mut self.nonce);
-        }
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &self.salt)
@@ -165,6 +162,18 @@ impl Vault {
         let pw_hash = password_hash.hash.expect("Could not extract hash");
         let pw_key = Key::from_slice(pw_hash.as_bytes());
         let cipher = Aes256Gcm::new(pw_key);
+
+        if self.changed {
+            if !increase_nonce(&mut self.nonce) {
+                // we need to change the key as we otherwise use the same nonce for encryption of the vault entries twice which is not safe
+                let mut gen_key = [0u8; 32];
+                OsRng.fill_bytes(&mut gen_key);
+
+                self.encrypted_key = cipher
+                    .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
+                    .expect("Could not encrypt key");
+            }
+        }
 
         let key = cipher
             .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
@@ -512,8 +521,9 @@ pub enum Error {
 }
 
 /// Increases the given `nonce` by one
-fn increase_nonce(nonce: &mut GenericArray<u8, U12>) {
-    // TODO when nonce is back at 0000....0000 again we should change the key as it is no longer considered safe, as we use the same nonce twice
+///
+/// Returns a `bool` wether the current key is still safe to use or if it is needed to change the key.
+fn increase_nonce(nonce: &mut GenericArray<u8, U12>) -> bool {
     let slice = nonce.as_mut_slice();
     for i in 0..11 {
         let curr = slice[i];
@@ -521,9 +531,11 @@ fn increase_nonce(nonce: &mut GenericArray<u8, U12>) {
             slice[i] = 0;
         } else {
             slice[i] += 1;
-            return;
+            break;
         }
     }
+    // this checks if we are back to 00...00
+    !slice.iter().all(|num| num == &0u8)
 }
 
 #[cfg(test)]
@@ -714,21 +726,16 @@ mod test {
     #[test]
     fn test_duplicated_passwords() -> Result<(), String> {
         let mut vault = get_small_vault();
-        vault.add_entry(VaultEntry::new_password(
+        let entry = VaultEntry::new_password(
             // add the same entry again
             "www.google.com".to_string(),
             Some("Googlerus Maximus".to_string()),
             "Tim Burton".to_string(),
             "GooglePW".to_string(),
             "".to_string(),
-        ));
-        vault.add_entry(VaultEntry::new_password(
-            "www.google.com".to_string(),
-            Some("Googlerus Maximus".to_string()),
-            "Tim Burton".to_string(),
-            "OtherPw".to_string(),
-            "".to_string(),
-        ));
+        );
+        vault.add_entry(entry.clone());
+        vault.add_entry(entry.clone());
 
         let result = vault.check_for_duplicated_passwords();
 
@@ -745,7 +752,8 @@ mod test {
     #[test]
     fn benchmark_100k_vault() -> Result<(), String> {
         let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
-        (0..100_000).for_each(|_| {
+        let expected = 100_000;
+        (0..expected).for_each(|_| {
             vault.add_entry(VaultEntry::new_password(
                 "www.google.com".to_string(),
                 Some("Googlerus Maximus".to_string()),
@@ -757,8 +765,10 @@ mod test {
 
         assert_eq!(
             vault.entries.len(),
-            100_000,
-            "Vault has wrong number of entries."
+            expected,
+            "Before encryption: Vault has {} number of entries, expected: {}",
+            vault.entries.len(),
+            expected
         );
 
         let enc = vault.encrypt(&PW).expect("Could not encrypt vault");
@@ -766,10 +776,10 @@ mod test {
 
         assert_eq!(
             decrypted.entries.len(),
-            100_000,
-            "Vault has {} number of entries, expected: {}",
+            expected,
+            "After encryption: Vault has {} number of entries, expected: {}",
             decrypted.entries.len(),
-            100_000
+            expected
         );
 
         Ok(())
