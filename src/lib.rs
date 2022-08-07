@@ -748,40 +748,4 @@ mod test {
 
         Ok(())
     }
-
-    #[test]
-    fn benchmark_100k_vault() -> Result<(), String> {
-        let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
-        let expected = 100_000;
-        (0..expected).for_each(|_| {
-            vault.add_entry(VaultEntry::new_password(
-                "www.google.com".to_string(),
-                Some("Googlerus Maximus".to_string()),
-                "Tim Burton".to_string(),
-                "GooglePW".to_string(),
-                "".to_string(),
-            ));
-        });
-
-        assert_eq!(
-            vault.entries.len(),
-            expected,
-            "Before encryption: Vault has {} number of entries, expected: {}",
-            vault.entries.len(),
-            expected
-        );
-
-        let enc = vault.encrypt(&PW).expect("Could not encrypt vault");
-        let decrypted = enc.decrypt(&PW).expect("Could not decrypt vault");
-
-        assert_eq!(
-            decrypted.entries.len(),
-            expected,
-            "After encryption: Vault has {} number of entries, expected: {}",
-            decrypted.entries.len(),
-            expected
-        );
-
-        Ok(())
-    }
 }
