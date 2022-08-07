@@ -102,8 +102,7 @@ fn main() {
             Ok(_) => {
                 tokens = buffer.split_whitespace();
 
-                // NEW IMPLEMENTATION
-                let mut foo: Vec<OsString> = tokens
+                let mut token_itr: Vec<OsString> = tokens
                     .map(|token| {
                         let mut ostoken = OsString::new();
                         ostoken.push(token);
@@ -111,15 +110,15 @@ fn main() {
                     })
                     .collect();
                 let prefix: OsString = "REPL".into();
-                foo.splice(0..0, [prefix]);
-                match ReplArgs::try_parse_from(foo) {
+                token_itr.splice(0..0, [prefix]);
+                match ReplArgs::try_parse_from(token_itr) {
                     Ok(args) => match args.command {
                         Command::AddEntry(new_entry) => vault.add_entry(VaultEntry::new_password(
                             new_entry.website,
                             None,
                             new_entry.username,
                             new_entry.password,
-                            new_entry.comment.unwrap_or("".into()),
+                            new_entry.comment.unwrap_or_else(|| "".into()),
                         )),
                         Command::GetAll => {
                             for (index, entry) in vault.iter().enumerate() {

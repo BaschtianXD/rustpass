@@ -52,26 +52,36 @@ impl Vault {
     /// # Examples
     ///
     /// TODO
-    pub fn new_with_password<N: AsRef<str>>(name: String, password: N) -> Result<Vault, ()> {
+    pub fn new_with_password<N: AsRef<str>>(
+        name: String,
+        password: N,
+    ) -> Result<Vault, VaultCreationError> {
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
-        let password_hash = argon2
-            .hash_password(password.as_ref().as_bytes(), &salt)
-            .expect("Could not hash password");
+        let password_hash = match argon2.hash_password(password.as_ref().as_bytes(), &salt) {
+            Ok(pw_hash) => pw_hash,
+            Err(_) => return Err(VaultCreationError::HashError),
+        };
 
-        let safe_pw = password_hash.hash.expect("Could not extract hash");
+        let safe_pw = match password_hash.hash {
+            Some(hash) => hash,
+            None => return Err(VaultCreationError::HashError),
+        };
 
         let mut gen_key = [0u8; 32];
         OsRng.fill_bytes(&mut gen_key);
 
-        let cipher = Aes256Gcm::new_from_slice(safe_pw.as_bytes())
-            .expect("Result of argon2 hash had invalid length");
+        let cipher = match Aes256Gcm::new_from_slice(safe_pw.as_bytes()) {
+            Ok(cipher) => cipher,
+            Err(_) => return Err(VaultCreationError::EncryptionError),
+        };
 
         let nonce = Nonce::from([0u8; 12]);
 
-        let encrypted_key = cipher
-            .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
-            .expect("Could not encrypt key");
+        let encrypted_key = match cipher.encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref()) {
+            Ok(enc_key) => enc_key,
+            Err(_) => return Err(VaultCreationError::EncryptionError),
+        };
 
         let mut hasher = Sha256::new();
         hasher.update(safe_pw);
@@ -90,7 +100,7 @@ impl Vault {
             changed: true,
         };
 
-        return Ok(vault);
+        Ok(vault)
     }
 
     /// Adds a new vault entry to self.
@@ -117,8 +127,8 @@ impl Vault {
     ///
     /// This replaces the old entry with the new one.
     pub fn update_entry(&mut self, index: usize, new_entry: VaultEntry) {
-        let foo = self.entries.get_mut(index).unwrap();
-        *foo = new_entry;
+        let entry = self.entries.get_mut(index).unwrap();
+        *entry = new_entry;
     }
 
     /// Removes an enrty from self.
@@ -146,7 +156,7 @@ impl Vault {
     /// Encrypts `self`.
     ///
     /// Checks if the given password is correct. If so, the vault gets encrypted and a `Result<VaultEncrypted, Error>` gets returned
-    pub fn encrypt(mut self, password: &str) -> Result<VaultEncrypted, Error> {
+    pub fn encrypt(mut self, password: &str) -> Result<VaultEncrypted, VaultTransformError> {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &self.salt)
@@ -158,7 +168,7 @@ impl Vault {
         let password_hash_hash = hasher.finalize();
 
         if password_hash_hash != self.password_hash_hash {
-            return Err(Error::WrongPassword);
+            return Err(VaultTransformError::WrongPassword);
         }
 
         // Decrypt key
@@ -209,7 +219,7 @@ impl Vault {
         &mut self,
         old_password: N,
         new_password: N,
-    ) -> Result<(), Error> {
+    ) -> Result<(), VaultTransformError> {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(old_password.as_ref().as_bytes(), &self.salt)
@@ -223,7 +233,7 @@ impl Vault {
         let pwhh = GenericArray::from_slice(&self.password_hash_hash);
 
         if password_hash_hash != *pwhh {
-            return Err(Error::WrongPassword);
+            return Err(VaultTransformError::WrongPassword);
         }
 
         // decrypt key with old password
@@ -264,7 +274,7 @@ impl Vault {
     pub fn iter(&self) -> VaultIterator {
         VaultIterator {
             index: 0,
-            vault: &self,
+            vault: self,
         }
     }
 
@@ -355,7 +365,7 @@ impl VaultEntry {
         comment: String,
     ) -> VaultEntry {
         VaultEntry {
-            title: title.unwrap_or(format!("{}@{}", &username, &website).into()),
+            title: title.unwrap_or(format!("{}@{}", &username, &website)),
             created: Utc::now().naive_local(),
             last_changed: Utc::now().naive_local(),
             last_used: None,
@@ -417,9 +427,9 @@ impl VaultEntry {
                 }
 
                 match score {
-                    0..=4 => return Some(PasswordQuality::Bad),
-                    5..=6 => return Some(PasswordQuality::Good),
-                    _other => return Some(PasswordQuality::Excellent),
+                    0..=4 => Some(PasswordQuality::Bad),
+                    5..=6 => Some(PasswordQuality::Good),
+                    _other => Some(PasswordQuality::Excellent),
                 }
             }
             VaultEntryData::Anything { data: _ } => None,
@@ -458,7 +468,7 @@ pub struct VaultEncrypted {
 
 impl VaultEncrypted {
     /// Tries to decrypt [self] with the given `password`
-    pub fn decrypt(self, password: &str) -> Result<Vault, Error> {
+    pub fn decrypt(self, password: &str) -> Result<Vault, VaultTransformError> {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(password.as_bytes(), &self.salt)
@@ -472,12 +482,12 @@ impl VaultEncrypted {
         let pwhh = GenericArray::from_slice(&self.password_hash_hash);
 
         if password_hash_hash != *pwhh {
-            return Err(Error::WrongPassword);
+            return Err(VaultTransformError::WrongPassword);
         }
 
         // Decrypt key
-        let foo = password_hash.hash.expect("Could not extract hash");
-        let cipher = Aes256Gcm::new_from_slice(foo.as_bytes()).expect("Key has wrong size");
+        let hash = password_hash.hash.expect("Could not extract hash");
+        let cipher = Aes256Gcm::new_from_slice(hash.as_bytes()).expect("Key has wrong size");
 
         let nonce = GenericArray::from_slice(&self.nonce);
 
@@ -512,29 +522,43 @@ impl VaultEncrypted {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Error {
+pub enum VaultTransformError {
     WrongPassword,
     IntegrityCompomised,
     MalformedInput,
     Unknown,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum VaultCreationError {
+    HashError,
+    EncryptionError,
+}
+
 /// Increases the given `nonce` by one
 ///
 /// Returns a `bool` wether the current key is still safe to use or if it is needed to change the key.
 fn increase_nonce(nonce: &mut GenericArray<u8, U12>) -> bool {
-    let slice = nonce.as_mut_slice();
-    for i in 0..11 {
-        let curr = slice[i];
-        if curr == u8::MAX {
-            slice[i] = 0;
+    //let slice = nonce.as_mut_slice();
+    // for i in 0..11 {
+    //     let curr = slice[i];
+    //     if curr == u8::MAX {
+    //         slice[i] = 0;
+    //     } else {
+    //         slice[i] += 1;
+    //         break;
+    //     }
+    // }
+    for item in nonce.iter_mut() {
+        if item == &u8::MAX {
+            *item = 0;
         } else {
-            slice[i] += 1;
+            *item += 1;
             break;
         }
     }
     // this checks if we are back to 00...00
-    !slice.iter().all(|num| num == &0u8)
+    !nonce.iter().all(|num| num == &0u8)
 }
 
 #[cfg(test)]
@@ -561,8 +585,8 @@ mod test {
     fn encrypt_decrypt() -> Result<(), String> {
         let vault = get_small_vault();
 
-        let enc = vault.encrypt(&PW).expect("Could not encrypt vault");
-        let decrypted = enc.decrypt(&PW).expect("Could not decrypt vault");
+        let enc = vault.encrypt(PW).expect("Could not encrypt vault");
+        let decrypted = enc.decrypt(PW).expect("Could not decrypt vault");
 
         let entries = decrypted.get_entries();
 
@@ -734,7 +758,7 @@ mod test {
             "".to_string(),
         );
         vault.add_entry(entry.clone());
-        vault.add_entry(entry.clone());
+        vault.add_entry(entry);
 
         let result = vault.check_for_duplicated_passwords();
 
