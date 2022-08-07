@@ -7,10 +7,12 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "3.1.5", features = ["derive"] } # CLI
-serde = { version = "1.0", features = ["derive"] } # (de)serialization of vault file
-aes-gcm = "0.9.4" # encryption
-argon2 = "0.3.4" # encryption
+serde = { version = "1.0", features = [
+    "derive",
+] } # (de)serialization of vault file
+aes-gcm = "0.10.1" # encryption
+argon2 = "0.4.1" # encryption
 rand_core = { version = "0.6", features = ["std"] } # encryption
 sha2 = "0.10.2" # encryption
 ciborium = "0.2.0" # CBOR (de)serialization
-chrono = { version = "0.4", features = ["serde"]}
+chrono = { version = "0.4", features = ["serde"] }

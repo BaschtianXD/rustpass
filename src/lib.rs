@@ -3,12 +3,15 @@ use std::{
     fmt::{self, Display},
 };
 
-use aes_gcm::aead::generic_array::{
-    typenum::{U12, U32},
-    GenericArray,
+use aes_gcm::aead::Aead;
+use aes_gcm::{
+    aead::generic_array::{
+        typenum::{U12, U32},
+        GenericArray,
+    },
+    KeyInit,
 };
-use aes_gcm::aead::{Aead, NewAead};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2,
@@ -61,8 +64,8 @@ impl Vault {
         let mut gen_key = [0u8; 32];
         OsRng.fill_bytes(&mut gen_key);
 
-        let key = Key::from_slice(safe_pw.as_bytes());
-        let cipher = Aes256Gcm::new(key);
+        let cipher = Aes256Gcm::new_from_slice(safe_pw.as_bytes())
+            .expect("Result of argon2 hash had invalid length");
 
         let nonce = Nonce::from([0u8; 12]);
 
@@ -160,19 +163,17 @@ impl Vault {
 
         // Decrypt key
         let pw_hash = password_hash.hash.expect("Could not extract hash");
-        let pw_key = Key::from_slice(pw_hash.as_bytes());
-        let cipher = Aes256Gcm::new(pw_key);
+        let cipher =
+            Aes256Gcm::new_from_slice(pw_hash.as_bytes()).expect("Argon2hash has wrong size");
 
-        if self.changed {
-            if !increase_nonce(&mut self.nonce) {
-                // we need to change the key as we otherwise use the same nonce for encryption of the vault entries twice which is not safe
-                let mut gen_key = [0u8; 32];
-                OsRng.fill_bytes(&mut gen_key);
+        if self.changed && !increase_nonce(&mut self.nonce) {
+            // we need to change the key as we otherwise use the same nonce for encryption of the vault entries twice which is not safe
+            let mut gen_key = [0u8; 32];
+            OsRng.fill_bytes(&mut gen_key);
 
-                self.encrypted_key = cipher
-                    .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
-                    .expect("Could not encrypt key");
-            }
+            self.encrypted_key = cipher
+                .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
+                .expect("Could not encrypt key");
         }
 
         let key = cipher
@@ -181,8 +182,7 @@ impl Vault {
 
         let mut buf: Vec<u8> = Vec::new();
         ciborium::ser::into_writer(&self.entries, &mut buf).expect("Could not write to buffer");
-        let key = Key::from_slice(&key);
-        let cipher = Aes256Gcm::new(key);
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("Key has wrong size");
 
         let encrypted_data = cipher
             .encrypt(&self.nonce, &*buf)
@@ -228,8 +228,8 @@ impl Vault {
 
         // decrypt key with old password
         let old_safe_pw = password_hash.hash.expect("Could not extract hash");
-        let pw_key = Key::from_slice(old_safe_pw.as_bytes());
-        let cipher = Aes256Gcm::new(pw_key);
+        let cipher =
+            Aes256Gcm::new_from_slice(old_safe_pw.as_bytes()).expect("Argon2hash has wrong size");
 
         let key = cipher
             .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
@@ -246,12 +246,13 @@ impl Vault {
         self.password_hash_hash = hasher.finalize();
 
         // encrypt new key with new password
-        let cipher = Aes256Gcm::new(Key::from_slice(
+        let cipher = Aes256Gcm::new_from_slice(
             password_hash
                 .hash
                 .expect("Could not extract hash")
                 .as_bytes(),
-        ));
+        )
+        .expect("Key has wrong size");
         self.encrypted_key = cipher
             .encrypt(&Nonce::from([0u8; 12]), key.as_ref())
             .expect("Could not encrypt key");
@@ -476,8 +477,7 @@ impl VaultEncrypted {
 
         // Decrypt key
         let foo = password_hash.hash.expect("Could not extract hash");
-        let pw_key = Key::from_slice(foo.as_bytes());
-        let cipher = Aes256Gcm::new(pw_key);
+        let cipher = Aes256Gcm::new_from_slice(foo.as_bytes()).expect("Key has wrong size");
 
         let nonce = GenericArray::from_slice(&self.nonce);
 
@@ -486,8 +486,7 @@ impl VaultEncrypted {
             .expect("Could not decrypt key");
 
         // Decrypt data
-        let key = Key::from_slice(&key);
-        let cipher = Aes256Gcm::new(key);
+        let cipher = Aes256Gcm::new_from_slice(&key).expect("Key has wrong size");
         let plain_data = cipher
             .decrypt(nonce, self.encrypted_data.as_ref())
             .expect("Could not decrypt data"); // TODO better error handling
