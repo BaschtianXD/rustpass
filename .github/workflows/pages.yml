@@ -30,13 +30,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: setup rust toolchain
+      - name: Setup Rust Toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
-      - uses: actions-rs/cargo@v1
+      - name: Build docs
+        uses: actions-rs/cargo@v1
         with:
           command: doc
       - name: Setup Pages
