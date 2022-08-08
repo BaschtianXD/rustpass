@@ -2,12 +2,21 @@
 
 A framework for securely storing credentials written in Rust.
 
-## Installation
+## Documentation
+
+Documentation is available [here](https://baschtianxd.github.io/rustpass/rustpass/index.html#).
+
+## Usage (Library)
+
+1. Clone this repository to your system
+2. Link the local repository in your `cargo.toml`
+
+## Usage (CLI - WIP)
+
+### Installation
 
 1. Clone this repository
 2. Execute `cargo build --release` to build the application
-
-## Usage
 
 ### Create a new vault
 
