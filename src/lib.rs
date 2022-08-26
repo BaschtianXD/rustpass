@@ -330,7 +330,7 @@ impl<'a> Iterator for VaultIterator<'a> {
 }
 
 /// Variants of [VaultEntry] data that can be saved in a [Vault]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum VaultEntryData {
     Password {
         website: String,
@@ -443,7 +443,7 @@ impl Display for VaultEntry {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum PasswordQuality {
     Exposed,
     Bad,
