@@ -345,7 +345,7 @@ pub enum VaultEntryData {
 /// Item for [Vault]
 ///
 /// Contains [VaultEntryData] and metadata for the item.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct VaultEntry {
     pub title: String,
     pub created: NaiveDateTime,
