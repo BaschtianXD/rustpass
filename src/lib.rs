@@ -36,6 +36,7 @@ pub struct Vault {
     encrypted_key: Vec<u8>,
 
     nonce: GenericArray<u8, U12>,
+    key_nonce: GenericArray<u8, U12>,
     entries: Vec<VaultEntry>,
 
     changed: bool,
@@ -48,10 +49,6 @@ impl Vault {
     ///
     /// * `name` - A string that holds the name of the vault
     /// * `password` - A string ref that hold the password of the vault
-    ///
-    /// # Examples
-    ///
-    /// TODO
     pub fn new_with_password<N: AsRef<str>>(
         name: String,
         password: N,
@@ -77,8 +74,9 @@ impl Vault {
         };
 
         let nonce = Nonce::from([0u8; 12]);
+        let key_nonce = Nonce::from([0u8; 12]);
 
-        let encrypted_key = match cipher.encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref()) {
+        let encrypted_key = match cipher.encrypt(&key_nonce, gen_key.as_ref()) {
             Ok(enc_key) => enc_key,
             Err(_) => return Err(VaultCreationError::EncryptionError),
         };
@@ -93,6 +91,8 @@ impl Vault {
             password_hash_hash,
             salt,
             encrypted_key,
+
+            key_nonce,
             nonce,
 
             entries: Vec::new(),
@@ -179,15 +179,19 @@ impl Vault {
         if self.changed && !increase_nonce(&mut self.nonce) {
             // we need to change the key as we otherwise use the same nonce for encryption of the vault entries twice which is not safe
             let mut gen_key = [0u8; 32];
+
+            if !increase_nonce(&mut self.key_nonce) {
+                return Err(VaultTransformError::IntegrityCompomisedPassword);
+            }
             OsRng.fill_bytes(&mut gen_key);
 
             self.encrypted_key = cipher
-                .encrypt(&Nonce::from([0u8; 12]), gen_key.as_ref())
+                .encrypt(&self.key_nonce, gen_key.as_ref())
                 .expect("Could not encrypt key");
         }
 
         let key = cipher
-            .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
+            .decrypt(&self.key_nonce, self.encrypted_key.as_ref())
             .expect("Could not decrypt key");
 
         let mut buf: Vec<u8> = Vec::new();
@@ -205,6 +209,7 @@ impl Vault {
             salt: self.salt.as_str().to_owned(),
             encrypted_key: self.encrypted_key,
             nonce: self.nonce.into(),
+            key_nonce: self.key_nonce.into(),
 
             encrypted_data,
         };
@@ -219,7 +224,7 @@ impl Vault {
         &mut self,
         old_password: N,
         new_password: N,
-    ) -> Result<(), VaultTransformError> {
+    ) -> Result<(), VaultPasswordChangeError> {
         let argon2 = Argon2::default();
         let password_hash = argon2
             .hash_password(old_password.as_ref().as_bytes(), &self.salt)
@@ -233,7 +238,7 @@ impl Vault {
         let pwhh = GenericArray::from_slice(&self.password_hash_hash);
 
         if password_hash_hash != *pwhh {
-            return Err(VaultTransformError::WrongPassword);
+            return Err(VaultPasswordChangeError::WrongPassword);
         }
 
         // decrypt key with old password
@@ -242,7 +247,7 @@ impl Vault {
             Aes256Gcm::new_from_slice(old_safe_pw.as_bytes()).expect("Argon2hash has wrong size");
 
         let key = cipher
-            .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
+            .decrypt(&self.key_nonce, self.encrypted_key.as_ref())
             .expect("Could not decrypt key");
 
         // generate new cipher
@@ -264,7 +269,7 @@ impl Vault {
         )
         .expect("Key has wrong size");
         self.encrypted_key = cipher
-            .encrypt(&Nonce::from([0u8; 12]), key.as_ref())
+            .encrypt(&self.key_nonce, key.as_ref())
             .expect("Could not encrypt key");
 
         Ok(())
@@ -462,6 +467,7 @@ pub struct VaultEncrypted {
     #[serde(rename = "key")]
     encrypted_key: Vec<u8>,
     nonce: [u8; 12],
+    key_nonce: [u8; 12],
 
     encrypted_data: Vec<u8>,
 }
@@ -492,7 +498,10 @@ impl VaultEncrypted {
         let nonce = GenericArray::from_slice(&self.nonce);
 
         let key = cipher
-            .decrypt(&Nonce::from([0u8; 12]), self.encrypted_key.as_ref())
+            .decrypt(
+                GenericArray::from_slice(&self.key_nonce),
+                self.encrypted_key.as_ref(),
+            )
             .expect("Could not decrypt key");
 
         // Decrypt data
@@ -511,6 +520,7 @@ impl VaultEncrypted {
             salt: SaltString::new(&self.salt).expect("Could not parse salt"),
             encrypted_key: self.encrypted_key,
             nonce: GenericArray::from_slice(&self.nonce).to_owned(),
+            key_nonce: GenericArray::from_slice(&self.key_nonce).to_owned(),
 
             entries: data,
 
@@ -521,15 +531,20 @@ impl VaultEncrypted {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VaultTransformError {
     WrongPassword,
-    IntegrityCompomised,
+    IntegrityCompomisedPassword,
     MalformedInput,
     Unknown,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VaultPasswordChangeError {
+    WrongPassword,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VaultCreationError {
     HashError,
     EncryptionError,
@@ -537,7 +552,10 @@ pub enum VaultCreationError {
 
 /// Increases the given `nonce` by one
 ///
-/// Returns a `bool` wether the current key is still safe to use or if it is needed to change the key.
+/// Returns a `bool` wether the nonce has overflowed and reset back to 0000...0000.
+///
+/// # Beware
+/// An overflow usually indicates that the nonce will be reused and we have to take further precautions as to not reuse a nonce.
 fn increase_nonce(nonce: &mut GenericArray<u8, U12>) -> bool {
     //let slice = nonce.as_mut_slice();
     // for i in 0..11 {
@@ -563,7 +581,13 @@ fn increase_nonce(nonce: &mut GenericArray<u8, U12>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::{PasswordQuality::*, Vault, VaultEntry};
+    use aes_gcm::{
+        aead::{generic_array::GenericArray, Aead},
+        Aes256Gcm, KeyInit,
+    };
+    use argon2::{Argon2, PasswordHasher};
+
+    use crate::{PasswordQuality::*, Vault, VaultEntry, VaultTransformError};
 
     const NAME: &str = "TestVault";
     const PW: &str = "Super-Secret_P4ssw0rd!";
@@ -770,5 +794,47 @@ mod test {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_integrity_compromised() -> Result<(), String> {
+        let expected = VaultTransformError::IntegrityCompomisedPassword;
+        let mut vault = get_small_vault();
+
+        let max_nonce = GenericArray::from([u8::MAX; 12]);
+
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(PW.as_bytes(), &vault.salt)
+            .expect("Could not hash password");
+
+        let pw_hash = password_hash.hash.expect("Could not extract hash");
+        let cipher =
+            Aes256Gcm::new_from_slice(pw_hash.as_bytes()).expect("Argon2hash has wrong size");
+
+        let key = cipher
+            .decrypt(&vault.key_nonce, vault.encrypted_key.as_ref())
+            .expect("Could not decrypt key");
+
+        vault.key_nonce = max_nonce;
+        vault.encrypted_key = cipher
+            .encrypt(&vault.key_nonce, key.as_ref())
+            .expect("Could not encrypt key");
+
+        vault.nonce = max_nonce;
+
+        match vault.encrypt(&PW) {
+            Ok(_) => Err("Encryption should fail as nonce overflows".into()),
+            Err(err) => {
+                if err != VaultTransformError::IntegrityCompomisedPassword {
+                    Err(format!(
+                        "Wrong error was thrown, expected: {:?}, actual: {:?}",
+                        expected, err
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+        }
     }
 }
