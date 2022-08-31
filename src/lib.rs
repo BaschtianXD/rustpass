@@ -823,7 +823,7 @@ mod test {
 
         vault.nonce = max_nonce;
 
-        match vault.encrypt(&PW) {
+        match vault.encrypt(PW) {
             Ok(_) => Err("Encryption should fail as nonce overflows".into()),
             Err(err) => {
                 if err != VaultTransformError::IntegrityCompomisedPassword {
