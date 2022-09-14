@@ -470,7 +470,7 @@ pub enum PasswordQuality {
 }
 
 /// Represents a [Vault] in an encrypted state
-/// 
+///
 /// Use [`Self::decrypt`] to transform it to [Vault]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VaultEncrypted {
