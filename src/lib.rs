@@ -45,10 +45,17 @@ pub struct Vault {
 impl Vault {
     /// Create a new Vault with a password as authentication method.
     ///
-    /// # Arguments
+    /// # Example
     ///
-    /// * `name` - A string that holds the name of the vault
-    /// * `password` - A string ref that hold the password of the vault
+    /// ```
+    /// use rustpass::Vault;
+    ///
+    /// let name = "My new vault";
+    /// let password = "supersecretpassword";
+    /// let vault = Vault::new_with_password(name.into(), password).expect("Unable to create vault");
+    /// # assert_eq!(vault.name, name);
+    ///
+    /// ```
     pub fn new_with_password<N: AsRef<str>>(
         name: String,
         password: N,
@@ -57,6 +64,7 @@ impl Vault {
         let argon2 = Argon2::default();
         let password_hash = match argon2.hash_password(password.as_ref().as_bytes(), &salt) {
             Ok(pw_hash) => pw_hash,
+            // This could only happen when password is longer than usize::MAX
             Err(_) => return Err(VaultCreationError::HashError),
         };
 
@@ -106,7 +114,6 @@ impl Vault {
     /// Adds a new vault entry to self.
     ///
     /// Appends a new entry at the back. If you want to insert a new entry at a specific index use [`insert_entry`](Self::insert_entry) instead.
-    ///
     pub fn add_entry(&mut self, entry: VaultEntry) {
         self.entries.push(entry);
         self.changed = true;
@@ -181,7 +188,7 @@ impl Vault {
             let mut gen_key = [0u8; 32];
 
             if !increase_nonce(&mut self.key_nonce) {
-                return Err(VaultTransformError::IntegrityCompomisedPassword);
+                return Err(VaultTransformError::PasswordIntegrityCompromised);
             }
             OsRng.fill_bytes(&mut gen_key);
 
@@ -406,15 +413,19 @@ impl VaultEntry {
                 password,
             } => {
                 let mut score = 0u8;
+                // lowercase character
                 if password.chars().any(|c| matches!(c, 'a'..='z')) {
                     score += 1;
                 }
+                // uppercase character
                 if password.chars().any(|c| matches!(c, 'A'..='Z')) {
                     score += 1;
                 }
+                // numerical character
                 if password.chars().any(|c| matches!(c, '0'..='9')) {
                     score += 1;
                 }
+                // special character
                 if password.chars().any(|c| {
                     matches!(c, '!'..='/')
                         || matches!(c, ':'..='@')
@@ -423,6 +434,8 @@ impl VaultEntry {
                 }) {
                     score += 1;
                 }
+
+                // password length
                 let num_chars = password.chars().count();
                 match num_chars {
                     0..=9 => return Some(PasswordQuality::Bad),
@@ -457,6 +470,8 @@ pub enum PasswordQuality {
 }
 
 /// Represents a [Vault] in an encrypted state
+/// 
+/// Use [`Self::decrypt`] to transform it to [Vault]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VaultEncrypted {
     pub name: String,
@@ -534,9 +549,7 @@ impl VaultEncrypted {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VaultTransformError {
     WrongPassword,
-    IntegrityCompomisedPassword,
-    MalformedInput,
-    Unknown,
+    PasswordIntegrityCompromised,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -798,7 +811,7 @@ mod test {
 
     #[test]
     fn test_integrity_compromised() -> Result<(), String> {
-        let expected = VaultTransformError::IntegrityCompomisedPassword;
+        let expected = VaultTransformError::PasswordIntegrityCompromised;
         let mut vault = get_small_vault();
 
         let max_nonce = GenericArray::from([u8::MAX; 12]);
@@ -826,7 +839,7 @@ mod test {
         match vault.encrypt(PW) {
             Ok(_) => Err("Encryption should fail as nonce overflows".into()),
             Err(err) => {
-                if err != VaultTransformError::IntegrityCompomisedPassword {
+                if err != VaultTransformError::PasswordIntegrityCompromised {
                     Err(format!(
                         "Wrong error was thrown, expected: {:?}, actual: {:?}",
                         expected, err
