@@ -120,8 +120,8 @@ impl Vault {
     }
 
     /// Retrieve all vault entries from self.
-    pub fn get_entries(&self) -> &Vec<VaultEntry> {
-        &self.entries
+    pub fn get_entries(&self) -> &[VaultEntry] {
+        self.entries.as_slice()
     }
 
     /// Inserts a new vault entry to self at the given index.
@@ -136,6 +136,7 @@ impl Vault {
     pub fn update_entry(&mut self, index: usize, new_entry: VaultEntry) {
         let entry = self.entries.get_mut(index).unwrap();
         *entry = new_entry;
+        self.changed = true;
     }
 
     /// Removes an enrty from self.
@@ -158,6 +159,7 @@ impl Vault {
     pub fn set_last_used(&mut self, index: usize) {
         let mut entry = &mut self.entries[index];
         entry.last_used = Some(Utc::now().naive_local());
+        self.changed = true;
     }
 
     /// Encrypts `self`.
@@ -606,7 +608,7 @@ mod test {
     const PW: &str = "Super-Secret_P4ssw0rd!";
 
     fn get_small_vault() -> Vault {
-        let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
+        let mut vault = Vault::new_with_password(NAME.into(), PW).expect("Could not create vault");
         vault.add_entry(VaultEntry::new_password(
             "www.google.com".to_string(),
             Some("Googlerus Maximus".to_string()),
