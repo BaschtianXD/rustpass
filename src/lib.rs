@@ -414,15 +414,15 @@ impl VaultEntry {
             } => {
                 let mut score = 0u8;
                 // lowercase character
-                if password.chars().any(|c| matches!(c, 'a'..='z')) {
+                if password.chars().any(|c| c.is_ascii_lowercase()) {
                     score += 1;
                 }
                 // uppercase character
-                if password.chars().any(|c| matches!(c, 'A'..='Z')) {
+                if password.chars().any(|c| c.is_ascii_uppercase()) {
                     score += 1;
                 }
                 // numerical character
-                if password.chars().any(|c| matches!(c, '0'..='9')) {
+                if password.chars().any(|c| c.is_ascii_digit()) {
                     score += 1;
                 }
                 // special character
