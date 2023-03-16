@@ -491,8 +491,9 @@ impl VaultEncrypted {
     /// Tries to decrypt [self] with the given `password`
     pub fn decrypt(self, password: &str) -> Result<Vault, VaultTransformError> {
         let argon2 = Argon2::default();
+        let Ok(salt) = SaltString::from_b64(&self.salt) else { return Err(VaultTransformError::VaultIntegrityCompromised)};
         let password_hash = argon2
-            .hash_password(password.as_bytes(), &self.salt)
+            .hash_password(password.as_bytes(), salt.as_salt())
             .expect("Could not hash password");
 
         // Check if password is correct
@@ -532,7 +533,7 @@ impl VaultEncrypted {
             name: self.name,
             version: self.version,
             password_hash_hash: GenericArray::from_slice(&self.password_hash_hash).to_owned(),
-            salt: SaltString::new(&self.salt).expect("Could not parse salt"),
+            salt,
             encrypted_key: self.encrypted_key,
             nonce: GenericArray::from_slice(&self.nonce).to_owned(),
             key_nonce: GenericArray::from_slice(&self.key_nonce).to_owned(),
@@ -550,6 +551,7 @@ impl VaultEncrypted {
 pub enum VaultTransformError {
     WrongPassword,
     PasswordIntegrityCompromised,
+    VaultIntegrityCompromised,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
