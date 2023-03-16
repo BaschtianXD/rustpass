@@ -606,7 +606,7 @@ mod test {
     const PW: &str = "Super-Secret_P4ssw0rd!";
 
     fn get_small_vault() -> Vault {
-        let mut vault = Vault::new_with_password(NAME.into(), &PW).expect("Could not create vault");
+        let mut vault = Vault::new_with_password(NAME.into(), PW).expect("Could not create vault");
         vault.add_entry(VaultEntry::new_password(
             "www.google.com".to_string(),
             Some("Googlerus Maximus".to_string()),
