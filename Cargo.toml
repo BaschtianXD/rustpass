@@ -14,5 +14,5 @@ aes-gcm = "0.10.1" # encryption
 argon2 = "0.5.0" # encryption
 rand_core = { version = "0.6", features = ["std"] } # encryption
 sha2 = "0.10.2" # encryption
-ciborium = "0.2.0" # CBOR (de)serialization
+ciborium = "0.2.1" # CBOR (de)serialization
 chrono = { version = "0.4", features = ["serde"] }
