@@ -10,7 +10,7 @@ clap = { version = "4.3", features = ["derive"] } # CLI
 serde = { version = "1.0", features = [
     "derive",
 ] } # (de)serialization of vault file
-aes-gcm = "0.10.1" # encryption
+aes-gcm = "0.10.2" # encryption
 argon2 = "0.5.0" # encryption
 rand_core = { version = "0.6", features = ["std"] } # encryption
 sha2 = "0.10.2" # encryption
