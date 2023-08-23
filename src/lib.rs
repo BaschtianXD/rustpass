@@ -156,7 +156,7 @@ impl Vault {
 
     /// Sets `last_used` to now on the [VaultEntry] at the given `index`.
     pub fn set_last_used(&mut self, index: usize) {
-        let mut entry = &mut self.entries[index];
+        let entry = &mut self.entries[index];
         entry.last_used = Some(Utc::now().naive_local());
     }
 
